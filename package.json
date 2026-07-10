@@ -2,8 +2,11 @@
   "name": "studyflow",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
-    "build": "npm run build --prefix frontend",
+    "build": "cd backend && npm ci && cd ../frontend && npm ci --include=dev && npm run build",
     "start": "node backend/server.js",
     "dev:backend": "npm run dev --prefix backend",
     "dev:frontend": "npm run dev --prefix frontend"

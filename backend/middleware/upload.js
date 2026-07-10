@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const storage = require('../services/storage');
 
-const uploadsDir = path.join(__dirname, '..', 'uploads');
+const uploadsDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
 ['notes', 'past-papers'].forEach((dir) => {
   const full = path.join(uploadsDir, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });

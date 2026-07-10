@@ -7,7 +7,8 @@ const BUCKETS = {
   PAPERS: 'past-papers',
 };
 
-const uploadsDir = path.join(__dirname, '..', 'uploads');
+// UPLOAD_DIR lets a host (e.g. a Railway volume) persist files outside the code dir.
+const uploadsDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
 
 function isCloud() {
   return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
