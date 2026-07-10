@@ -67,14 +67,6 @@ export const api = {
     create: (body) => request('/study-sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     delete: (id) => request(`/study-sessions/${id}`, { method: 'DELETE' }),
   },
-  trainingLogs: {
-    list: (days) => request(`/training-logs?days=${days || 60}`),
-    today: () => request('/training-logs/today'),
-    streak: () => request('/training-logs/streak'),
-    create: (body) => request('/training-logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    update: (id, body) => request(`/training-logs/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    delete: (id) => request(`/training-logs/${id}`, { method: 'DELETE' }),
-  },
   calendar: {
     get: (month) => request(`/calendar${month ? `?month=${month}` : ''}`),
   },

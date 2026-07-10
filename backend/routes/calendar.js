@@ -37,12 +37,7 @@ router.get('/', async (req, res) => {
     GROUP BY date(studied_at)
   `).all(start, end);
 
-  const trainingDays = await db.prepare(`
-    SELECT DISTINCT log_date AS day FROM training_logs
-    WHERE log_date BETWEEN ? AND ?
-  `).all(start, end);
-
-  res.json({ month: start.slice(0, 7), assignments, studySessions, trainingDays });
+  res.json({ month: start.slice(0, 7), assignments, studySessions });
 });
 
 module.exports = router;

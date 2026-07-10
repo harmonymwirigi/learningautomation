@@ -1,5 +1,10 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 const { getPostgresUrl, getPostgresUrlSource } = require('./config');
+
+// Return DATE columns (OID 1082) as plain 'YYYY-MM-DD' strings, matching SQLite.
+// Otherwise pg returns JS Date objects, which broke date-string logic like the
+// daily streak (String(Date).slice(0,10) yields "Wed Jul 09" instead of "2026-07-09").
+types.setTypeParser(1082, (v) => v);
 
 let pool;
 

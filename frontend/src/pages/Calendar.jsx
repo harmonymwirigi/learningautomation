@@ -39,8 +39,6 @@ export default function Calendar() {
   const studyByDay = {};
   data?.studySessions?.forEach((s) => { studyByDay[s.day] = s.minutes; });
 
-  const trainingSet = new Set(data?.trainingDays?.map((t) => t.day) || []);
-
   const selectedAssignments = selected ? assignmentsByDay[selected] || [] : [];
 
   if (loading) {
@@ -52,7 +50,7 @@ export default function Calendar() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white">Calendar</h1>
-          <p className="mt-1 text-slate-500">Deadlines, study sessions, and training days at a glance</p>
+          <p className="mt-1 text-slate-500">Deadlines and study sessions at a glance</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setCurrent(subMonths(current, 1))} className="rounded-lg border border-slate-700 p-2 text-slate-400 hover:text-white"><ChevronLeft size={18} /></button>
@@ -64,7 +62,6 @@ export default function Calendar() {
       <div className="flex flex-wrap gap-4 text-xs text-slate-500">
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" /> High priority</span>
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" /> Studied</span>
-        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-indigo-400" /> Training logged</span>
       </div>
 
       <div className="card overflow-hidden">
@@ -79,7 +76,6 @@ export default function Calendar() {
             const key = format(day, 'yyyy-MM-dd');
             const dayAssignments = assignmentsByDay[key] || [];
             const studied = studyByDay[key];
-            const trained = trainingSet.has(key);
             const isSelected = selected === key;
 
             return (
@@ -108,7 +104,6 @@ export default function Calendar() {
                 </div>
                 <div className="mt-1 flex gap-1">
                   {studied > 0 && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" title={`${studied}m studied`} />}
-                  {trained && <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" title="Training logged" />}
                 </div>
               </button>
             );
@@ -145,9 +140,6 @@ export default function Calendar() {
           )}
           {studyByDay[selected] > 0 && (
             <p className="mt-3 text-sm text-emerald-400">Studied {studyByDay[selected]} minutes this day</p>
-          )}
-          {trainingSet.has(selected) && (
-            <p className="mt-1 text-sm text-indigo-400">Training journal entry logged</p>
           )}
         </section>
       )}

@@ -52,10 +52,6 @@ async function buildDailyDigest() {
     WHERE t.day_of_week = ? ORDER BY t.start_time
   `).all(new Date().getDay());
 
-  const journalToday = (await db.prepare(`
-    SELECT COUNT(*) AS count FROM training_logs WHERE log_date = date('now')
-  `).get()).count;
-
   if (overdue.length) {
     lines.push(`🚨 *OVERDUE (${overdue.length})*`);
     overdue.forEach((a) => lines.push(`• ${a.title} — ${a.unit_name}`));
@@ -93,7 +89,6 @@ async function buildDailyDigest() {
 
   lines.push(`📖 Studied today: ${formatMinutes(studyToday)}`);
   lines.push(`🔔 Unread alerts: ${unreadAlerts}`);
-  if (!journalToday) lines.push('📝 Journal not logged today — keep your streak!');
 
   const baseUrl = process.env.APP_URL || 'http://localhost:3001';
   lines.push('', `Open StudyFlow: ${baseUrl}`);

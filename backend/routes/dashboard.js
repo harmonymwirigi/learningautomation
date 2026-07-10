@@ -41,25 +41,6 @@ router.get('/', async (_req, res, next) => {
       FROM study_sessions WHERE date(studied_at) = date('now')
     `).get();
 
-    const trainingDates = (await db.prepare(`
-      SELECT DISTINCT log_date FROM training_logs ORDER BY log_date DESC
-    `).all()).map((r) => r.log_date);
-
-    let trainingStreak = 0;
-    const today = new Date();
-    for (let i = 0; i < trainingDates.length; i++) {
-      const expected = new Date(today);
-      expected.setDate(expected.getDate() - i);
-      const expectedStr = expected.toISOString().slice(0, 10);
-      const logDate = String(trainingDates[i]).slice(0, 10);
-      if (logDate === expectedStr) trainingStreak++;
-      else break;
-    }
-
-    const todayJournal = (await db.prepare(`
-      SELECT COUNT(*) AS count FROM training_logs WHERE log_date = date('now')
-    `).get()).count;
-
     const todayTimetable = await db.prepare(`
       SELECT t.*, u.name AS unit_name, u.color AS unit_color
       FROM timetable_slots t LEFT JOIN units u ON t.unit_id = u.id
@@ -104,6 +85,7 @@ router.get('/', async (_req, res, next) => {
     `).all()).map((r) => r.lesson_date);
 
     let skillStreak = 0;
+    const today = new Date();
     for (let i = 0; i < skillStreakDates.length; i++) {
       const expected = new Date(today);
       expected.setDate(expected.getDate() - i);
@@ -114,7 +96,7 @@ router.get('/', async (_req, res, next) => {
     }
 
     res.json({
-      stats, upcoming, overdue, recentNotes, studyStats, trainingStreak, todayJournal,
+      stats, upcoming, overdue, recentNotes, studyStats,
       todayTimetable, quizStats, weakTopics, recentQuizAttempts,
       todaySkillLesson, skillStreak,
     });

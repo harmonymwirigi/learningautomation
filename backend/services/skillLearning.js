@@ -348,7 +348,8 @@ async function getStreak() {
   const total = (await db.prepare('SELECT COUNT(*) AS count FROM daily_it_lessons WHERE completed = 1').get()).count;
   const categoriesExplored = (await db.prepare('SELECT COUNT(DISTINCT skill_category) AS count FROM daily_it_lessons').get()).count;
 
-  return { streak_days: streak, total_completed: total, categories_explored: categoriesExplored };
+  // Postgres returns COUNT() as a string; normalize to numbers (SQLite already returns numbers).
+  return { streak_days: streak, total_completed: Number(total), categories_explored: Number(categoriesExplored) };
 }
 
 module.exports = {

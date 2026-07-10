@@ -33,7 +33,6 @@ async function start() {
   app.use('/api/assignments', require('./routes/assignments'));
   app.use('/api/notifications', require('./routes/notifications'));
   app.use('/api/study-sessions', require('./routes/studySessions'));
-  app.use('/api/training-logs', require('./routes/trainingLogs'));
   app.use('/api/calendar', require('./routes/calendar'));
   app.use('/api/topics', require('./routes/topics'));
   app.use('/api/timetable', require('./routes/timetable'));
