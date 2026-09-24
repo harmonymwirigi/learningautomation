@@ -1,5 +1,7 @@
 const { Pool, types } = require('pg');
 const { getPostgresUrl, getPostgresUrlSource } = require('./config');
+const { OWNED_TABLES } = require('./ownedTables');
+const { DEFAULT_CATALOG } = require('./defaultCatalog');
 
 // Return DATE columns (OID 1082) as plain 'YYYY-MM-DD' strings, matching SQLite.
 // Otherwise pg returns JS Date objects, which broke date-string logic like the
@@ -17,7 +19,7 @@ function translateSql(sql) {
   s = s.replace(/date\('now',\s*'-(\d+) days'\)/gi, "(CURRENT_DATE - INTERVAL '$1 days')");
   s = s.replace(/date\(([^)]+)\)/gi, '($1::date)');
 
-  const boolFields = ['is_read', 'is_covered', 'completed', 'is_correct'];
+  const boolFields = ['is_read', 'is_covered', 'completed', 'is_correct', 'is_active', 'is_current'];
   for (const field of boolFields) {
     s = s.replace(new RegExp(`(WHERE|AND|OR)\\s+${field}\\s*=\\s*0\\b`, 'gi'), `$1 ${field} = false`);
     s = s.replace(new RegExp(`(WHERE|AND|OR)\\s+${field}\\s*=\\s*1\\b`, 'gi'), `$1 ${field} = true`);
@@ -90,8 +92,57 @@ function describeConnection(url) {
 // datetime/date columns become real timestamptz/date so `deadline >= NOW()` etc. work;
 // the four boolean-flag columns become BOOLEAN (see boolFields in translateSql).
 const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    full_name TEXT NOT NULL,
+    admission_number TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE,
+    phone TEXT,
+    school TEXT,
+    course TEXT,
+    year_of_study INTEGER,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'student',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    weekly_goal_minutes INTEGER NOT NULL DEFAULT 600,
+    semesters_per_year INTEGER NOT NULL DEFAULT 2,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS schools (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS courses (
+    id SERIAL PRIMARY KEY,
+    school_id INTEGER REFERENCES schools(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(school_id, name)
+  );
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS terms (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    year_of_study INTEGER NOT NULL,
+    semester INTEGER NOT NULL,
+    label TEXT,
+    is_current BOOLEAN NOT NULL DEFAULT false,
+    started_at DATE DEFAULT CURRENT_DATE,
+    ended_at DATE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, year_of_study, semester)
+  );
   CREATE TABLE IF NOT EXISTS units (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    term_id INTEGER REFERENCES terms(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     code TEXT,
     description TEXT,
@@ -100,6 +151,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS notes (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     filename TEXT NOT NULL,
@@ -109,6 +161,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS past_papers (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     year TEXT,
@@ -120,6 +173,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS assignments (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
@@ -131,6 +185,8 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS study_sessions (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    term_id INTEGER REFERENCES terms(id) ON DELETE SET NULL,
     unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
     duration_minutes INTEGER NOT NULL,
     notes TEXT,
@@ -140,6 +196,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS notifications (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
     message TEXT NOT NULL,
     type TEXT DEFAULT 'deadline',
@@ -148,6 +205,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS training_logs (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
     log_date DATE NOT NULL DEFAULT CURRENT_DATE,
     topic TEXT NOT NULL,
@@ -159,6 +217,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS topics (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     is_covered BOOLEAN DEFAULT false,
@@ -168,6 +227,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS timetable_slots (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     day_of_week INTEGER NOT NULL,
     start_time TEXT NOT NULL,
     end_time TEXT NOT NULL,
@@ -178,6 +238,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS exam_analyses (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     paper_id INTEGER REFERENCES past_papers(id) ON DELETE SET NULL,
     analysis_json TEXT NOT NULL,
@@ -185,6 +246,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS note_summaries (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     note_id INTEGER NOT NULL UNIQUE REFERENCES notes(id) ON DELETE CASCADE,
     summary_text TEXT NOT NULL,
     key_points_json TEXT,
@@ -192,6 +254,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS quizzes (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
@@ -211,6 +274,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS quiz_attempts (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     quiz_id INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
     score INTEGER DEFAULT 0,
     total INTEGER DEFAULT 0,
@@ -229,6 +293,7 @@ const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS topic_weakness (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     topic_name TEXT NOT NULL,
     weakness_score INTEGER DEFAULT 1,
@@ -242,14 +307,9 @@ const SCHEMA = `
     message_preview TEXT,
     sent_at TIMESTAMPTZ DEFAULT NOW()
   );
-  CREATE TABLE IF NOT EXISTS user_it_skills (
-    id SERIAL PRIMARY KEY,
-    skill_name TEXT NOT NULL UNIQUE,
-    level TEXT DEFAULT 'intermediate',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-  );
   CREATE TABLE IF NOT EXISTS paper_questions (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     paper_id INTEGER NOT NULL REFERENCES past_papers(id) ON DELETE CASCADE,
     unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
     question_text TEXT NOT NULL,
@@ -259,29 +319,47 @@ const SCHEMA = `
     sort_order INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW()
   );
-  CREATE TABLE IF NOT EXISTS daily_it_lessons (
-    id SERIAL PRIMARY KEY,
-    lesson_date DATE NOT NULL UNIQUE,
-    skill_category TEXT NOT NULL,
-    title TEXT NOT NULL,
-    overview TEXT,
-    key_concepts_json TEXT,
-    practical_task TEXT,
-    resources_json TEXT,
-    reflection TEXT,
-    completed BOOLEAN DEFAULT false,
-    duration_minutes INTEGER,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-  );
-  INSERT INTO user_it_skills (skill_name, level)
-    VALUES ('Website Design', 'intermediate')
-    ON CONFLICT (skill_name) DO NOTHING;
+`;
+
+// Brings a pre-accounts database up to the multi-user shape: every owned table
+// gains user_id, and the two single-user UNIQUE constraints widen to include it.
+const MIGRATION = `
+  ${OWNED_TABLES.map((t) =>
+    `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;`
+  ).join('\n  ')}
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'student';
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_goal_minutes INTEGER NOT NULL DEFAULT 600;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS semesters_per_year INTEGER NOT NULL DEFAULT 2;
+  ALTER TABLE units ADD COLUMN IF NOT EXISTS term_id INTEGER REFERENCES terms(id) ON DELETE SET NULL;
+  ALTER TABLE study_sessions ADD COLUMN IF NOT EXISTS term_id INTEGER REFERENCES terms(id) ON DELETE SET NULL;
+  ${OWNED_TABLES.map((t) =>
+    `CREATE INDEX IF NOT EXISTS ${t}_user_id_idx ON ${t} (user_id);`
+  ).join('\n  ')}
 `;
 
 async function ensureSchema() {
   // node-postgres runs multiple semicolon-separated statements in one call when
   // no bind params are used; this creates every table on a fresh database.
   await pool.query(SCHEMA);
+  await pool.query(MIGRATION);
+  await seedSchools();
+}
+
+// Only ever runs against an empty schools table, so an admin's edits and
+// deletions are never undone by a restart.
+async function seedSchools() {
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM schools');
+  if (rows[0].count > 0) return;
+
+  for (const [school, courses] of Object.entries(DEFAULT_CATALOG)) {
+    const inserted = await pool.query('INSERT INTO schools (name) VALUES ($1) RETURNING id', [school]);
+    const schoolId = inserted.rows[0].id;
+    for (const course of courses) {
+      await pool.query('INSERT INTO courses (school_id, name) VALUES ($1, $2)', [schoolId, course]);
+    }
+  }
+  console.log(`Database: seeded ${Object.keys(DEFAULT_CATALOG).length} default schools`);
 }
 
 async function init() {

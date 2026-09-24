@@ -8,49 +8,52 @@ function formatMinutes(m) {
   return r ? `${h}h ${r}m` : `${h}h`;
 }
 
-async function buildDailyDigest() {
+async function buildDailyDigest(userId) {
+  if (!userId) throw new Error('buildDailyDigest requires a user');
+
   const lines = ['📚 *StudyFlow Daily Update*', ''];
 
   const overdue = await db.prepare(`
     SELECT a.title, a.deadline, u.name AS unit_name
     FROM assignments a JOIN units u ON a.unit_id = u.id
-    WHERE a.status != 'completed' AND a.deadline < datetime('now')
+    WHERE a.user_id = ? AND a.status != 'completed' AND a.deadline < datetime('now')
     ORDER BY a.deadline ASC LIMIT 5
-  `).all();
+  `).all(userId);
 
   const dueToday = await db.prepare(`
     SELECT a.title, u.name AS unit_name
     FROM assignments a JOIN units u ON a.unit_id = u.id
-    WHERE a.status != 'completed' AND date(a.deadline) = date('now')
-  `).all();
+    WHERE a.user_id = ? AND a.status != 'completed' AND date(a.deadline) = date('now')
+  `).all(userId);
 
   const upcoming = await db.prepare(`
     SELECT a.title, a.deadline, u.name AS unit_name
     FROM assignments a JOIN units u ON a.unit_id = u.id
-    WHERE a.status != 'completed' AND a.deadline >= datetime('now')
+    WHERE a.user_id = ? AND a.status != 'completed' AND a.deadline >= datetime('now')
     ORDER BY a.deadline ASC LIMIT 5
-  `).all();
+  `).all(userId);
 
   const weakTopics = await db.prepare(`
     SELECT tw.topic_name, u.name AS unit_name, tw.weakness_score
     FROM topic_weakness tw JOIN units u ON tw.unit_id = u.id
+    WHERE tw.user_id = ?
     ORDER BY tw.weakness_score DESC LIMIT 5
-  `).all();
+  `).all(userId);
 
   const studyToday = (await db.prepare(`
     SELECT COALESCE(SUM(duration_minutes), 0) AS minutes
-    FROM study_sessions WHERE date(studied_at) = date('now')
-  `).get()).minutes;
+    FROM study_sessions WHERE user_id = ? AND date(studied_at) = date('now')
+  `).get(userId)).minutes;
 
   const unreadAlerts = (await db.prepare(`
-    SELECT COUNT(*) AS count FROM notifications WHERE is_read = 0
-  `).get()).count;
+    SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND is_read = 0
+  `).get(userId)).count;
 
   const todayTimetable = await db.prepare(`
     SELECT t.start_time, t.end_time, u.name AS unit_name, t.label
     FROM timetable_slots t LEFT JOIN units u ON t.unit_id = u.id
-    WHERE t.day_of_week = ? ORDER BY t.start_time
-  `).all(new Date().getDay());
+    WHERE t.user_id = ? AND t.day_of_week = ? ORDER BY t.start_time
+  `).all(userId, new Date().getDay());
 
   if (overdue.length) {
     lines.push(`🚨 *OVERDUE (${overdue.length})*`);
@@ -114,13 +117,40 @@ function buildQuizResultMessage({ quiz_title, unit_name, score, total, percentag
   return lines.join('\n');
 }
 
-async function sendDailyDigest() {
+async function sendDailyDigest(userId) {
   const { isAnyConfigured } = require('./messaging');
   if (!isAnyConfigured()) return { sent: false, reason: 'not configured' };
 
   const today = new Date().toISOString().slice(0, 10);
-  const text = await buildDailyDigest();
-  return sendNotification(text, { messageKey: `daily-digest:${today}` });
+  const text = await buildDailyDigest(userId);
+  return sendNotification(text, { messageKey: `daily-digest:${userId}:${today}` });
+}
+
+// One digest per account per day. The messaging channel itself is still a
+// single shared Telegram/WhatsApp destination from backend/.env, so each
+// account's digest is labelled with whose it is.
+async function sendDailyDigestToAll() {
+  const { isAnyConfigured } = require('./messaging');
+  if (!isAnyConfigured()) return [];
+
+  const recipients = await db.prepare('SELECT id, full_name FROM users ORDER BY id').all();
+  const results = [];
+
+  for (const user of recipients) {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const text = `👤 *${user.full_name}*\n\n${await buildDailyDigest(user.id)}`;
+      results.push({
+        user_id: user.id,
+        ...(await sendNotification(text, { messageKey: `daily-digest:${user.id}:${today}` })),
+      });
+    } catch (err) {
+      console.warn(`Digest for user ${user.id} failed:`, err.message);
+      results.push({ user_id: user.id, sent: false, error: err.message });
+    }
+  }
+
+  return results;
 }
 
 async function sendAlert(message, notificationId) {
@@ -145,6 +175,7 @@ module.exports = {
   buildDailyDigest,
   buildQuizResultMessage,
   sendDailyDigest,
+  sendDailyDigestToAll,
   sendAlert,
   sendQuizWhatsApp,
 };

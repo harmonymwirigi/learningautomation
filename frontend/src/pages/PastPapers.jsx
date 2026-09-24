@@ -292,7 +292,11 @@ export default function PastPapers() {
                   </div>
                 </div>
                 <div className="flex gap-1">
-                  <a href={api.pastPapers.downloadUrl(p.id)} className="rounded p-2 text-slate-500 hover:bg-slate-800 hover:text-white"><Download size={16} /></a>
+                  <button
+                    onClick={() => api.pastPapers.download(p.id, p.original_name).catch((e) => alert(e.message))}
+                    className="rounded p-2 text-slate-500 hover:bg-slate-800 hover:text-white"
+                    title="Download"
+                  ><Download size={16} /></button>
                   <button onClick={() => handleDelete(p.id)} className="rounded p-2 text-slate-500 hover:bg-red-500/20 hover:text-red-400"><Trash2 size={16} /></button>
                 </div>
               </div>

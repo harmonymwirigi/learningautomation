@@ -15,8 +15,8 @@ router.get('/', async (req, res) => {
       FROM quizzes q
       JOIN notes n ON q.note_id = n.id
       JOIN units u ON q.unit_id = u.id
-      WHERE q.note_id = ? ORDER BY q.created_at DESC
-    `).all(note_id);
+      WHERE q.user_id = ? AND q.note_id = ? ORDER BY q.created_at DESC
+    `).all(req.userId, note_id);
   } else if (unit_id) {
     quizzes = await db.prepare(`
       SELECT q.*, n.title AS note_title, u.name AS unit_name, u.color AS unit_color,
@@ -24,8 +24,8 @@ router.get('/', async (req, res) => {
       FROM quizzes q
       JOIN notes n ON q.note_id = n.id
       JOIN units u ON q.unit_id = u.id
-      WHERE q.unit_id = ? ORDER BY q.created_at DESC
-    `).all(unit_id);
+      WHERE q.user_id = ? AND q.unit_id = ? ORDER BY q.created_at DESC
+    `).all(req.userId, unit_id);
   } else {
     quizzes = await db.prepare(`
       SELECT q.*, n.title AS note_title, u.name AS unit_name, u.color AS unit_color,
@@ -33,8 +33,9 @@ router.get('/', async (req, res) => {
       FROM quizzes q
       JOIN notes n ON q.note_id = n.id
       JOIN units u ON q.unit_id = u.id
+      WHERE q.user_id = ?
       ORDER BY q.created_at DESC LIMIT 50
-    `).all();
+    `).all(req.userId);
   }
 
   res.json(quizzes);
@@ -45,7 +46,7 @@ router.post('/generate-from-paper', async (req, res, next) => {
     const { paper_id } = req.body;
     if (!paper_id) return res.status(400).json({ error: 'paper_id is required' });
     const { createQuizFromPaper } = require('../services/paperRevision');
-    const quiz = await createQuizFromPaper(Number(paper_id));
+    const quiz = await createQuizFromPaper(Number(paper_id), req.userId);
     res.status(201).json(quiz);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -56,7 +57,7 @@ router.post('/generate', async (req, res, next) => {
   try {
     const { note_id } = req.body;
     if (!note_id) return res.status(400).json({ error: 'note_id is required' });
-    const quiz = await generateQuiz(Number(note_id));
+    const quiz = await generateQuiz(Number(note_id), req.userId);
     res.status(201).json(quiz);
   } catch (err) {
     next(err);
@@ -70,20 +71,21 @@ router.get('/weak-topics', async (req, res) => {
     topics = await db.prepare(`
       SELECT tw.*, u.name AS unit_name, u.color AS unit_color
       FROM topic_weakness tw JOIN units u ON tw.unit_id = u.id
-      WHERE tw.unit_id = ? ORDER BY tw.weakness_score DESC
-    `).all(unit_id);
+      WHERE tw.user_id = ? AND tw.unit_id = ? ORDER BY tw.weakness_score DESC
+    `).all(req.userId, unit_id);
   } else {
     topics = await db.prepare(`
       SELECT tw.*, u.name AS unit_name, u.color AS unit_color
       FROM topic_weakness tw JOIN units u ON tw.unit_id = u.id
+      WHERE tw.user_id = ?
       ORDER BY tw.weakness_score DESC LIMIT 20
-    `).all();
+    `).all(req.userId);
   }
   res.json(topics);
 });
 
 router.get('/:id', async (req, res) => {
-  const quiz = await getQuiz(Number(req.params.id));
+  const quiz = await getQuiz(Number(req.params.id), req.userId);
   if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
   res.json(quiz);
 });
@@ -92,7 +94,7 @@ router.post('/:id/submit', async (req, res, next) => {
   try {
     const { answers } = req.body;
     if (!answers?.length) return res.status(400).json({ error: 'answers array is required' });
-    const result = await markQuiz(Number(req.params.id), answers);
+    const result = await markQuiz(Number(req.params.id), req.userId, answers);
     res.json(result);
   } catch (err) {
     next(err);
@@ -101,8 +103,8 @@ router.post('/:id/submit', async (req, res, next) => {
 
 router.get('/:id/attempts', async (req, res) => {
   const attempts = await db.prepare(`
-    SELECT * FROM quiz_attempts WHERE quiz_id = ? ORDER BY completed_at DESC
-  `).all(Number(req.params.id));
+    SELECT * FROM quiz_attempts WHERE quiz_id = ? AND user_id = ? ORDER BY completed_at DESC
+  `).all(Number(req.params.id), req.userId);
   res.json(attempts.map((a) => ({
     ...a,
     weak_topics: a.weak_topics_json ? JSON.parse(a.weak_topics_json) : [],

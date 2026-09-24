@@ -33,15 +33,12 @@ const TABLES = [
   'exam_analyses',
   'topic_weakness',
   'whatsapp_log',
-  'user_it_skills',
-  'daily_it_lessons',
 ];
 
 const BOOL_COLS = {
   notifications: ['is_read'],
   topics: ['is_covered'],
   quiz_answers: ['is_correct'],
-  daily_it_lessons: ['completed'],
 };
 
 function convertRow(table, row) {

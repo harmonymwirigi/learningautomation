@@ -6,7 +6,7 @@ const router = express.Router();
 
 router.get('/', async (req, res) => {
   const { month } = req.query;
-  await generateDeadlineNotifications();
+  await generateDeadlineNotifications(req.userId);
 
   let start, end;
   if (month && /^\d{4}-\d{2}$/.test(month)) {
@@ -26,16 +26,16 @@ router.get('/', async (req, res) => {
   const assignments = await db.prepare(`
     SELECT a.*, u.name AS unit_name, u.color AS unit_color
     FROM assignments a JOIN units u ON a.unit_id = u.id
-    WHERE date(a.deadline) BETWEEN ? AND ?
+    WHERE a.user_id = ? AND date(a.deadline) BETWEEN ? AND ?
     ORDER BY a.deadline ASC
-  `).all(start, end);
+  `).all(req.userId, start, end);
 
   const studySessions = await db.prepare(`
     SELECT date(studied_at) AS day, SUM(duration_minutes) AS minutes
     FROM study_sessions
-    WHERE date(studied_at) BETWEEN ? AND ?
+    WHERE user_id = ? AND date(studied_at) BETWEEN ? AND ?
     GROUP BY date(studied_at)
-  `).all(start, end);
+  `).all(req.userId, start, end);
 
   res.json({ month: start.slice(0, 7), assignments, studySessions });
 });

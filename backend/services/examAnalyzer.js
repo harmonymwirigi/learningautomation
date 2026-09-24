@@ -76,13 +76,13 @@ function inferTopicLabel(questionText) {
   return words.slice(0, 3).join(' ') || 'General';
 }
 
-async function loadNotesTexts(unitId, noteIds) {
+async function loadNotesTexts(unitId, userId, noteIds) {
   if (!noteIds?.length) return [];
 
   const placeholders = noteIds.map(() => '?').join(',');
   const notes = await db.prepare(`
-    SELECT * FROM notes WHERE unit_id = ? AND id IN (${placeholders})
-  `).all(unitId, ...noteIds);
+    SELECT * FROM notes WHERE unit_id = ? AND user_id = ? AND id IN (${placeholders})
+  `).all(unitId, userId, ...noteIds);
 
   const results = [];
   for (const note of notes) {
@@ -197,28 +197,30 @@ function analyzeRuleBased(unit, notesTexts, papersWithText, notesWithPages = [])
   };
 }
 
-async function analyzeUnit(unitId, { paperId = null, noteIds = [] } = {}) {
-  const unit = await db.prepare('SELECT * FROM units WHERE id = ?').get(unitId);
+async function analyzeUnit(unitId, userId, { paperId = null, noteIds = [] } = {}) {
+  const unit = await db.prepare('SELECT * FROM units WHERE id = ? AND user_id = ?').get(unitId, userId);
   if (!unit) throw new Error('Unit not found');
 
   if (!noteIds.length) {
     throw new Error('Select at least one note to use for exam prep.');
   }
 
-  const notesTexts = await loadNotesTexts(unitId, noteIds);
+  const notesTexts = await loadNotesTexts(unitId, userId, noteIds);
   if (notesTexts.length === 0) {
     throw new Error('Could not read text from the selected notes. Try PDF, DOCX, PPT, PPTX, TXT, or MD files.');
   }
 
-  let notesWithPages = await loadUnitNotesWithPages(unitId);
+  let notesWithPages = await loadUnitNotesWithPages(unitId, userId);
   const noteIdSet = new Set(noteIds.map(Number));
   notesWithPages = notesWithPages.filter((n) => noteIdSet.has(n.id));
 
   let papers;
   if (paperId) {
-    papers = await db.prepare('SELECT * FROM past_papers WHERE id = ? AND unit_id = ?').all(paperId, unitId);
+    papers = await db.prepare('SELECT * FROM past_papers WHERE id = ? AND unit_id = ? AND user_id = ?')
+      .all(paperId, unitId, userId);
   } else {
-    papers = await db.prepare('SELECT * FROM past_papers WHERE unit_id = ? ORDER BY year DESC').all(unitId);
+    papers = await db.prepare('SELECT * FROM past_papers WHERE unit_id = ? AND user_id = ? ORDER BY year DESC')
+      .all(unitId, userId);
   }
 
   if (papers.length === 0) {
@@ -262,8 +264,8 @@ async function analyzeUnit(unitId, { paperId = null, noteIds = [] } = {}) {
   };
 
   const result = await db.prepare(`
-    INSERT INTO exam_analyses (unit_id, paper_id, analysis_json) VALUES (?, ?, ?)
-  `).run(unitId, paperId || null, JSON.stringify(analysis));
+    INSERT INTO exam_analyses (user_id, unit_id, paper_id, analysis_json) VALUES (?, ?, ?, ?)
+  `).run(userId, unitId, paperId || null, JSON.stringify(analysis));
 
   return { id: result.lastInsertRowid, ...analysis };
 }

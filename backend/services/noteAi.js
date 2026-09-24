@@ -49,8 +49,9 @@ async function loadNoteWithPages(note) {
   return { ...note, ...extracted };
 }
 
-async function loadUnitNotesWithPages(unitId) {
-  const notes = await db.prepare('SELECT * FROM notes WHERE unit_id = ?').all(unitId);
+async function loadUnitNotesWithPages(unitId, userId) {
+  const notes = await db.prepare('SELECT * FROM notes WHERE unit_id = ? AND user_id = ?')
+    .all(unitId, userId);
   const results = [];
   for (const note of notes) {
     try {
@@ -62,10 +63,10 @@ async function loadUnitNotesWithPages(unitId) {
   return results;
 }
 
-async function loadUnitPastPapers(unitId) {
+async function loadUnitPastPapers(unitId, userId) {
   const papers = await db.prepare(`
-    SELECT * FROM past_papers WHERE unit_id = ? ORDER BY year DESC, created_at DESC
-  `).all(unitId);
+    SELECT * FROM past_papers WHERE unit_id = ? AND user_id = ? ORDER BY year DESC, created_at DESC
+  `).all(unitId, userId);
   const results = [];
   for (const paper of papers) {
     try {
@@ -170,11 +171,11 @@ function buildPastPapersPromptSection(papers) {
     return `[Past Paper: ${p.title}${yearLabel}]\nQuestions/excerpts:\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`;
   }).join('\n\n');
 }
-async function summarizeNote(noteId) {
+async function summarizeNote(noteId, userId) {
   const note = await db.prepare(`
     SELECT n.*, u.name AS unit_name FROM notes n
-    JOIN units u ON n.unit_id = u.id WHERE n.id = ?
-  `).get(noteId);
+    JOIN units u ON n.unit_id = u.id WHERE n.id = ? AND n.user_id = ?
+  `).get(noteId, userId);
   if (!note) throw new Error('Note not found');
 
   const noteWithPages = await loadNoteWithPages(note);
@@ -219,8 +220,8 @@ Return JSON:
     `).run(summary, JSON.stringify(keyPoints), noteId);
   } else {
     await db.prepare(`
-      INSERT INTO note_summaries (note_id, summary_text, key_points_json) VALUES (?, ?, ?)
-    `).run(noteId, summary, JSON.stringify(keyPoints));
+      INSERT INTO note_summaries (user_id, note_id, summary_text, key_points_json) VALUES (?, ?, ?, ?)
+    `).run(userId, noteId, summary, JSON.stringify(keyPoints));
   }
 
   return {
@@ -231,18 +232,18 @@ Return JSON:
   };
 }
 
-async function generateQuiz(noteId) {
+async function generateQuiz(noteId, userId) {
   const note = await db.prepare(`
     SELECT n.*, u.name AS unit_name FROM notes n
-    JOIN units u ON n.unit_id = u.id WHERE n.id = ?
-  `).get(noteId);
+    JOIN units u ON n.unit_id = u.id WHERE n.id = ? AND n.user_id = ?
+  `).get(noteId, userId);
   if (!note) throw new Error('Note not found');
 
-  const notesWithPages = await loadUnitNotesWithPages(note.unit_id);
+  const notesWithPages = await loadUnitNotesWithPages(note.unit_id, userId);
   const primaryNote = notesWithPages.find((n) => n.id === noteId) || notesWithPages[0];
   if (!primaryNote) throw new Error('Could not read note content. Use PDF, TXT, or MD.');
 
-  const pastPapers = await loadUnitPastPapers(note.unit_id);
+  const pastPapers = await loadUnitPastPapers(note.unit_id, userId);
   const summaryRow = await db.prepare('SELECT * FROM note_summaries WHERE note_id = ?').get(noteId);
 
   const notesSection = buildNotesPromptSection(notesWithPages);
@@ -356,8 +357,8 @@ Generate 6-8 written-answer questions ONLY. No multiple choice. No true/false. U
   }
 
   const quizResult = await db.prepare(`
-    INSERT INTO quizzes (note_id, unit_id, title) VALUES (?, ?, ?)
-  `).run(noteId, note.unit_id, title);
+    INSERT INTO quizzes (user_id, note_id, unit_id, title) VALUES (?, ?, ?, ?)
+  `).run(userId, noteId, note.unit_id, title);
 
   const quizId = quizResult.lastInsertRowid;
   const insertQ = db.prepare(`
@@ -381,16 +382,17 @@ Generate 6-8 written-answer questions ONLY. No multiple choice. No true/false. U
     );
   }
 
-  return await getQuiz(quizId);
+  return await getQuiz(quizId, userId);
 }
-async function getQuiz(quizId) {
+
+async function getQuiz(quizId, userId) {
   const quiz = await db.prepare(`
     SELECT q.*, n.title AS note_title, u.name AS unit_name, u.color AS unit_color
     FROM quizzes q
     JOIN notes n ON q.note_id = n.id
     JOIN units u ON q.unit_id = u.id
-    WHERE q.id = ?
-  `).get(quizId);
+    WHERE q.id = ? AND q.user_id = ?
+  `).get(quizId, userId);
   if (!quiz) return null;
 
   const questions = (await db.prepare(`
@@ -406,13 +408,13 @@ async function getQuiz(quizId) {
   return { ...quiz, questions };
 }
 
-async function markQuiz(quizId, answers) {
-  const quiz = await getQuiz(quizId);
+async function markQuiz(quizId, userId, answers) {
+  const quiz = await getQuiz(quizId, userId);
   if (!quiz) throw new Error('Quiz not found');
 
   const attemptResult = await db.prepare(`
-    INSERT INTO quiz_attempts (quiz_id, started_at) VALUES (?, datetime('now'))
-  `).run(quizId);
+    INSERT INTO quiz_attempts (user_id, quiz_id, started_at) VALUES (?, ?, datetime('now'))
+  `).run(userId, quizId);
   const attemptId = attemptResult.lastInsertRowid;
 
   let score = 0;
@@ -501,17 +503,22 @@ Return JSON: { "is_correct": true/false, "score": 0-1, "feedback": "brief constr
       `).run(count, existing.id);
     } else {
       await db.prepare(`
-        INSERT INTO topic_weakness (unit_id, topic_name, weakness_score, source) VALUES (?, ?, ?, 'quiz')
-      `).run(quiz.unit_id, topic, count);
+        INSERT INTO topic_weakness (user_id, unit_id, topic_name, weakness_score, source) VALUES (?, ?, ?, ?, 'quiz')
+      `).run(userId, quiz.unit_id, topic, count);
     }
   }
+
+  // Auto-scheduled revision belongs to the same semester as the unit it came from.
+  const unitTerm = await db.prepare('SELECT term_id FROM units WHERE id = ?').get(quiz.unit_id);
 
   const studySessions = [];
   for (const { topic } of weakTopicsList) {
     const sessionResult = await db.prepare(`
-      INSERT INTO study_sessions (unit_id, duration_minutes, notes, topic_name, session_type)
-      VALUES (?, 30, ?, ?, 'weak_topic_review')
+      INSERT INTO study_sessions (user_id, term_id, unit_id, duration_minutes, notes, topic_name, session_type)
+      VALUES (?, ?, ?, 30, ?, ?, 'weak_topic_review')
     `).run(
+      userId,
+      unitTerm?.term_id || null,
       quiz.unit_id,
       `Review weak topic from quiz: ${topic}`,
       topic,
@@ -573,8 +580,8 @@ function parsePageRange(pagesStr) {
   return [...new Set(pages)].sort((a, b) => a - b);
 }
 
-async function getNotePageExcerpt(noteId, { from = 1, to = null } = {}) {
-  const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(noteId);
+async function getNotePageExcerpt(noteId, userId, { from = 1, to = null } = {}) {
+  const note = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?').get(noteId, userId);
   if (!note) throw new Error('Note not found');
 
   const noteWithPages = await loadNoteWithPages(note);
@@ -595,8 +602,9 @@ async function getNotePageExcerpt(noteId, { from = 1, to = null } = {}) {
   };
 }
 
-async function getNoteSummary(noteId) {
-  const row = await db.prepare('SELECT * FROM note_summaries WHERE note_id = ?').get(noteId);
+async function getNoteSummary(noteId, userId) {
+  const row = await db.prepare('SELECT * FROM note_summaries WHERE note_id = ? AND user_id = ?')
+    .get(noteId, userId);
   if (!row) return null;
   return {
     note_id: noteId,

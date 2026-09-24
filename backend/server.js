@@ -27,6 +27,19 @@ async function start() {
     console.log('Supabase Storage: local uploads folder');
   }
 
+  const { requireAuth, requireAdmin } = require('./middleware/auth');
+
+  // Public: registering, signing in, the school/course lists the sign-up form
+  // needs before anyone has an account, and the liveness probes.
+  app.use('/api/auth', require('./routes/auth'));
+  app.use('/api/schools', require('./routes/catalog'));
+  app.use('/api/health', require('./routes/health'));
+
+  // Everything below reads and writes one account's data, so it all sits
+  // behind requireAuth — no route gets to opt out by forgetting to add it.
+  app.use('/api', requireAuth);
+
+  app.use('/api/terms', require('./routes/terms'));
   app.use('/api/units', require('./routes/units'));
   app.use('/api/notes', require('./routes/notes'));
   app.use('/api/past-papers', require('./routes/pastPapers'));
@@ -42,12 +55,16 @@ async function start() {
   app.use('/api/whatsapp', require('./routes/whatsapp'));
   app.use('/api/ai', require('./routes/ai'));
   app.use('/api/dashboard', require('./routes/dashboard'));
-  app.use('/api/skill-learning', require('./routes/skillLearning'));
-  app.use('/api/health', require('./routes/health'));
+  app.use('/api/progress', require('./routes/progress'));
+  app.use('/api/chat', require('./routes/chat'));
+  app.use('/api/admin', requireAdmin, require('./routes/admin'));
 
-  app.use((err, _req, res, _next) => {
-    console.error(err);
-    res.status(500).json({ error: err.message || 'Internal server error' });
+  app.use((err, req, res, _next) => {
+    // sql.js throws plain strings rather than Errors, so err.message can be
+    // undefined — without this the real cause is swallowed.
+    const detail = typeof err === 'string' ? err : err?.message;
+    console.error(`${req.method} ${req.originalUrl} failed:`, err);
+    res.status(err?.status || 500).json({ error: detail || 'Internal server error' });
   });
 
   const hasFrontend = fs.existsSync(path.join(FRONTEND_DIST, 'index.html'));
@@ -64,6 +81,9 @@ async function start() {
       );
     });
   }
+
+  const promoted = await require('./services/users').syncAdminsFromEnv();
+  if (promoted.length) console.log(`Promoted to admin via ADMIN_EMAILS: ${promoted.join(', ')}`);
 
   app.listen(PORT, () => {
     if (hasFrontend) {
@@ -88,16 +108,25 @@ function logAIStatus() {
 
 function startWhatsAppScheduler() {
   const { isAnyConfigured } = require('./services/messaging');
-  const { sendDailyDigest } = require('./services/studyDigest');
+  const { sendDailyDigestToAll } = require('./services/studyDigest');
   const { processWhatsAppAlerts } = require('./services/notifications');
 
   if (!isAnyConfigured()) return;
 
   console.log('Messaging notifications enabled (Telegram/WhatsApp)');
 
+  // Deadline alerts are per account, so the scheduler walks every account
+  // rather than querying the whole table as it did before accounts existed.
+  async function alertsForEveryAccount() {
+    const accounts = await db.prepare('SELECT id FROM users ORDER BY id').all();
+    for (const { id } of accounts) {
+      await processWhatsAppAlerts(id).catch((err) => console.warn(`Alerts for user ${id}:`, err.message));
+    }
+  }
+
   // Check alerts every 30 minutes
   setInterval(() => {
-    processWhatsAppAlerts().catch((err) => console.warn('WhatsApp alerts:', err.message));
+    alertsForEveryAccount().catch((err) => console.warn('WhatsApp alerts:', err.message));
   }, 30 * 60 * 1000);
 
   // Daily digest at configured hour
@@ -106,14 +135,14 @@ function startWhatsAppScheduler() {
     setInterval(() => {
       const now = new Date();
       if (now.getHours() === digestHour && now.getMinutes() < 5) {
-        sendDailyDigest().catch((err) => console.warn('WhatsApp digest:', err.message));
+        sendDailyDigestToAll().catch((err) => console.warn('WhatsApp digest:', err.message));
       }
     }, 5 * 60 * 1000);
   }
 
   // Run once on startup (after 10s)
   setTimeout(() => {
-    processWhatsAppAlerts().catch(() => {});
+    alertsForEveryAccount().catch(() => {});
   }, 10000);
 }
 

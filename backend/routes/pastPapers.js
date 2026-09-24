@@ -19,15 +19,16 @@ router.get('/', async (req, res) => {
       SELECT p.*, u.name AS unit_name, u.color AS unit_color,
         (SELECT COUNT(*) FROM paper_questions WHERE paper_id = p.id) AS question_count
       FROM past_papers p JOIN units u ON p.unit_id = u.id
-      WHERE p.unit_id = ? ORDER BY p.year DESC, p.created_at DESC
-    `).all(unit_id);
+      WHERE p.unit_id = ? AND p.user_id = ? ORDER BY p.year DESC, p.created_at DESC
+    `).all(unit_id, req.userId);
   } else {
     papers = await db.prepare(`
       SELECT p.*, u.name AS unit_name, u.color AS unit_color,
         (SELECT COUNT(*) FROM paper_questions WHERE paper_id = p.id) AS question_count
       FROM past_papers p JOIN units u ON p.unit_id = u.id
+      WHERE p.user_id = ?
       ORDER BY p.year DESC, p.created_at DESC
-    `).all();
+    `).all(req.userId);
   }
   res.json(papers);
 });
@@ -38,7 +39,8 @@ router.post('/', uploadPastPapers.single('file'), async (req, res, next) => {
     if (!unit_id) return res.status(400).json({ error: 'Unit is required' });
     if (!req.file) return res.status(400).json({ error: 'File is required' });
 
-    const unit = await db.prepare('SELECT id FROM units WHERE id = ?').get(unit_id);
+    const unit = await db.prepare('SELECT id FROM units WHERE id = ? AND user_id = ?')
+      .get(unit_id, req.userId);
     if (!unit) return res.status(404).json({ error: 'Unit not found' });
 
     const ext = path.extname(req.file.originalname);
@@ -49,10 +51,10 @@ router.post('/', uploadPastPapers.single('file'), async (req, res, next) => {
 
     const paperTitle = title?.trim() || req.file.originalname;
     const result = await db.prepare(`
-      INSERT INTO past_papers (unit_id, title, year, semester, filename, original_name, file_size)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO past_papers (user_id, unit_id, title, year, semester, filename, original_name, file_size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      unit_id, paperTitle, year?.trim() || null, semester?.trim() || null,
+      req.userId, unit_id, paperTitle, year?.trim() || null, semester?.trim() || null,
       filename, req.file.originalname, req.file.size,
     );
 
@@ -62,7 +64,7 @@ router.post('/', uploadPastPapers.single('file'), async (req, res, next) => {
     const parsedNoteIds = parseNoteIds(note_ids);
     if (parsedNoteIds.length > 0) {
       try {
-        revision = await analyzePaperForRevision(paper.id, { noteIds: parsedNoteIds });
+        revision = await analyzePaperForRevision(paper.id, req.userId, { noteIds: parsedNoteIds });
       } catch (err) {
         revision = { error: err.message };
       }
@@ -81,7 +83,9 @@ router.post('/:id/analyze', async (req, res, next) => {
       ? req.body.note_ids.map(Number).filter((id) => Number.isFinite(id) && id > 0)
       : parseNoteIds(req.body.note_ids);
 
-    const result = await analyzePaperForRevision(paperId, { noteIds: noteIds.length ? noteIds : null });
+    const result = await analyzePaperForRevision(paperId, req.userId, {
+      noteIds: noteIds.length ? noteIds : null,
+    });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -90,7 +94,7 @@ router.post('/:id/analyze', async (req, res, next) => {
 
 router.get('/:id/questions', async (req, res, next) => {
   try {
-    const data = await getPaperQuestions(Number(req.params.id));
+    const data = await getPaperQuestions(Number(req.params.id), req.userId);
     if (!data) return res.status(404).json({ error: 'Past paper not found' });
     res.json(data);
   } catch (err) {
@@ -100,7 +104,7 @@ router.get('/:id/questions', async (req, res, next) => {
 
 router.post('/:id/create-quiz', async (req, res, next) => {
   try {
-    const quiz = await createQuizFromPaper(Number(req.params.id));
+    const quiz = await createQuizFromPaper(Number(req.params.id), req.userId);
     res.status(201).json(quiz);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -109,7 +113,8 @@ router.post('/:id/create-quiz', async (req, res, next) => {
 
 router.get('/:id/download', async (req, res, next) => {
   try {
-    const paper = await db.prepare('SELECT * FROM past_papers WHERE id = ?').get(req.params.id);
+    const paper = await db.prepare('SELECT * FROM past_papers WHERE id = ? AND user_id = ?')
+      .get(req.params.id, req.userId);
     if (!paper) return res.status(404).json({ error: 'Past paper not found' });
 
     const buffer = await storage.downloadBuffer(storage.BUCKETS.PAPERS, paper.filename);
@@ -122,11 +127,13 @@ router.get('/:id/download', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const paper = await db.prepare('SELECT * FROM past_papers WHERE id = ?').get(req.params.id);
+    const paper = await db.prepare('SELECT * FROM past_papers WHERE id = ? AND user_id = ?')
+      .get(req.params.id, req.userId);
     if (!paper) return res.status(404).json({ error: 'Past paper not found' });
 
     await storage.deleteFile(storage.BUCKETS.PAPERS, paper.filename);
-    await db.prepare('DELETE FROM past_papers WHERE id = ?').run(req.params.id);
+    await db.prepare('DELETE FROM past_papers WHERE id = ? AND user_id = ?')
+      .run(req.params.id, req.userId);
     res.json({ success: true });
   } catch (err) {
     next(err);

@@ -101,9 +101,13 @@ function NoteCard({ note, onRefresh, onDelete }) {
           >
             {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
-          <a href={api.notes.downloadUrl(note.id)} className="rounded p-2 text-slate-500 hover:bg-slate-800 hover:text-white">
+          <button
+            onClick={() => api.notes.download(note.id, note.original_name).catch((e) => alert(e.message))}
+            className="rounded p-2 text-slate-500 hover:bg-slate-800 hover:text-white"
+            title="Download"
+          >
             <Download size={16} />
-          </a>
+          </button>
           <button onClick={() => onDelete(note.id)} className="rounded p-2 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
             <Trash2 size={16} />
           </button>

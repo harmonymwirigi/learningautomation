@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   BookOpen, FileText, ClipboardList, Bell, GraduationCap, Timer, AlertTriangle,
-  Calendar, CalendarClock, Brain, Sparkles, Rocket,
+  Calendar, CalendarClock, Brain, Sparkles, Target,
 } from 'lucide-react';
 import { api } from '../api/client';
+import StudyProgress from '../components/StudyProgress';
 import { formatDateTime, relativeDeadline, deadlineColor, formatMinutes } from '../utils/dates';
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [progress, setProgress] = useState(null);
   const [aiStatus, setAiStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [aiTesting, setAiTesting] = useState(false);
@@ -17,9 +19,11 @@ export default function Dashboard() {
     Promise.all([
       api.dashboard(),
       api.ai.status().catch(() => null),
-    ]).then(([d, ai]) => {
+      api.progress().catch(() => null),
+    ]).then(([d, ai, p]) => {
       setData(d);
       setAiStatus(ai);
+      setProgress(p);
     }).catch(console.error).finally(() => setLoading(false));
   }, []);
 
@@ -44,7 +48,7 @@ export default function Dashboard() {
     );
   }
 
-  const { stats, upcoming, overdue, recentNotes, studyStats, todayTimetable, quizStats, weakTopics, recentQuizAttempts, todaySkillLesson, skillStreak } = data;
+  const { stats, upcoming, overdue, recentNotes, studyStats, todayTimetable, quizStats, weakTopics, recentQuizAttempts } = data;
 
   const statCards = [
     { label: 'Units', value: stats.units, icon: BookOpen, color: 'text-indigo-400', to: '/units' },
@@ -55,7 +59,7 @@ export default function Dashboard() {
     { label: 'Pending Tasks', value: stats.pending_assignments, icon: ClipboardList, color: 'text-amber-400', to: '/assignments' },
     { label: 'Alerts', value: stats.unread_notifications, icon: Bell, color: 'text-red-400', to: '/notifications' },
     { label: 'Studied Today', value: formatMinutes(studyStats.today_minutes), icon: Timer, color: 'text-emerald-400', to: '/study' },
-    { label: 'IT Skills Streak', value: `${skillStreak || 0}d`, icon: Rocket, color: 'text-cyan-400', to: '/daily-skills' },
+    { label: 'Study Progress', value: progress ? `${progress.overall.percent}%` : '—', icon: Target, color: 'text-cyan-400', to: '/progress' },
   ];
 
   return (
@@ -66,12 +70,14 @@ export default function Dashboard() {
           <p className="mt-1 text-slate-500">Overview of your study progress</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link to="/daily-skills" className="btn-secondary text-xs"><Rocket size={14} /> Daily IT Skill</Link>
+          <Link to="/progress" className="btn-secondary text-xs"><Target size={14} /> Progress</Link>
           <Link to="/assignments" className="btn-secondary text-xs"><ClipboardList size={14} /> Add Task</Link>
           <Link to="/calendar" className="btn-secondary text-xs"><Calendar size={14} /> Calendar</Link>
           <Link to="/exam-prep" className="btn-secondary text-xs"><Brain size={14} /> Exam Prep</Link>
         </div>
       </div>
+
+      <StudyProgress compact />
 
       {aiStatus && (
         <div className={`card p-4 flex flex-wrap items-center justify-between gap-4 ${aiStatus.configured ? 'border-violet-500/20 bg-violet-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}>
@@ -118,25 +124,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {(!todaySkillLesson || !todaySkillLesson.completed) && (
-        <div className="card border-cyan-500/20 bg-cyan-500/5 p-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Rocket size={20} className="text-cyan-400" />
-            <div>
-              {todaySkillLesson ? (
-                <p className="text-sm text-cyan-300">
-                  Today's IT lesson: <span className="font-medium">{todaySkillLesson.title}</span> — mark it complete!
-                </p>
-              ) : (
-                <p className="text-sm text-cyan-300">Learn a new IT skill today — cybersecurity, coding, video editing & more.</p>
-              )}
-            </div>
-          </div>
-          <Link to="/daily-skills" className="btn-primary text-xs shrink-0">
-            {todaySkillLesson ? 'Continue' : 'Get Lesson'}
-          </Link>
-        </div>
-      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {statCards.map(({ label, value, icon: Icon, color, to }) => (

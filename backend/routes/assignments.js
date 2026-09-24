@@ -8,9 +8,9 @@ router.get('/', async (req, res) => {
   const { status, unit_id } = req.query;
   let query = `
     SELECT a.*, u.name AS unit_name, u.color AS unit_color
-    FROM assignments a JOIN units u ON a.unit_id = u.id WHERE 1=1
+    FROM assignments a JOIN units u ON a.unit_id = u.id WHERE a.user_id = ?
   `;
-  const params = [];
+  const params = [req.userId];
   if (status) { query += ' AND a.status = ?'; params.push(status); }
   if (unit_id) { query += ' AND a.unit_id = ?'; params.push(unit_id); }
   query += ' ORDER BY a.deadline ASC';
@@ -18,14 +18,14 @@ router.get('/', async (req, res) => {
   res.json(await db.prepare(query).all(...params));
 });
 
-router.get('/upcoming', async (_req, res) => {
-  await generateDeadlineNotifications();
+router.get('/upcoming', async (req, res) => {
+  await generateDeadlineNotifications(req.userId);
   const upcoming = await db.prepare(`
     SELECT a.*, u.name AS unit_name, u.color AS unit_color
     FROM assignments a JOIN units u ON a.unit_id = u.id
-    WHERE a.status != 'completed' AND a.deadline >= datetime('now')
+    WHERE a.user_id = ? AND a.status != 'completed' AND a.deadline >= datetime('now')
     ORDER BY a.deadline ASC LIMIT 10
-  `).all();
+  `).all(req.userId);
   res.json(upcoming);
 });
 
@@ -35,30 +35,32 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Unit, title, and deadline are required' });
   }
 
-  const unit = await db.prepare('SELECT id FROM units WHERE id = ?').get(unit_id);
+  const unit = await db.prepare('SELECT id FROM units WHERE id = ? AND user_id = ?')
+    .get(unit_id, req.userId);
   if (!unit) return res.status(404).json({ error: 'Unit not found' });
 
   const result = await db.prepare(`
-    INSERT INTO assignments (unit_id, title, description, deadline, priority, reminder_days)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO assignments (user_id, unit_id, title, description, deadline, priority, reminder_days)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
-    unit_id, title.trim(), description?.trim() || null, deadline,
+    req.userId, unit_id, title.trim(), description?.trim() || null, deadline,
     priority || 'medium', reminder_days ?? 3,
   );
 
-  await generateDeadlineNotifications();
+  await generateDeadlineNotifications(req.userId);
   const assignment = await db.prepare('SELECT * FROM assignments WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json(assignment);
 });
 
 router.put('/:id', async (req, res) => {
-  const existing = await db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
+  const existing = await db.prepare('SELECT * FROM assignments WHERE id = ? AND user_id = ?')
+    .get(req.params.id, req.userId);
   if (!existing) return res.status(404).json({ error: 'Assignment not found' });
 
   const { title, description, deadline, priority, status, reminder_days } = req.body;
   await db.prepare(`
     UPDATE assignments SET title = ?, description = ?, deadline = ?, priority = ?, status = ?, reminder_days = ?
-    WHERE id = ?
+    WHERE id = ? AND user_id = ?
   `).run(
     title?.trim() || existing.title,
     description?.trim() ?? existing.description,
@@ -67,15 +69,17 @@ router.put('/:id', async (req, res) => {
     status || existing.status,
     reminder_days ?? existing.reminder_days,
     req.params.id,
+    req.userId,
   );
 
-  await generateDeadlineNotifications();
+  await generateDeadlineNotifications(req.userId);
   const assignment = await db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
   res.json(assignment);
 });
 
 router.delete('/:id', async (req, res) => {
-  const result = await db.prepare('DELETE FROM assignments WHERE id = ?').run(req.params.id);
+  const result = await db.prepare('DELETE FROM assignments WHERE id = ? AND user_id = ?')
+    .run(req.params.id, req.userId);
   if (!result.changes) return res.status(404).json({ error: 'Assignment not found' });
   res.json({ success: true });
 });

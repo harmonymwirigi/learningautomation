@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const terms = require('../services/terms');
 
 const router = express.Router();
 
@@ -9,27 +10,28 @@ router.get('/', async (req, res) => {
     SELECT s.*, u.name AS unit_name, u.color AS unit_color
     FROM study_sessions s
     LEFT JOIN units u ON s.unit_id = u.id
-    WHERE s.studied_at >= datetime('now', '-' || ? || ' days')
+    WHERE s.user_id = ? AND s.studied_at >= datetime('now', '-' || ? || ' days')
     ORDER BY s.studied_at DESC
-  `).all(days);
+  `).all(req.userId, days);
   res.json(sessions);
 });
 
-router.get('/stats', async (_req, res) => {
+router.get('/stats', async (req, res) => {
   const today = await db.prepare(`
     SELECT COALESCE(SUM(duration_minutes), 0) AS minutes
-    FROM study_sessions WHERE date(studied_at) = date('now')
-  `).get();
+    FROM study_sessions WHERE user_id = ? AND date(studied_at) = date('now')
+  `).get(req.userId);
 
   const week = await db.prepare(`
     SELECT COALESCE(SUM(duration_minutes), 0) AS minutes
-    FROM study_sessions WHERE studied_at >= datetime('now', '-7 days')
-  `).get();
+    FROM study_sessions WHERE user_id = ? AND studied_at >= datetime('now', '-7 days')
+  `).get(req.userId);
 
   const streak = await db.prepare(`
     SELECT date(studied_at) AS day FROM study_sessions
+    WHERE user_id = ?
     GROUP BY date(studied_at) ORDER BY day DESC
-  `).all();
+  `).all(req.userId);
 
   let streakCount = 0;
   const todayDate = new Date();
@@ -46,9 +48,9 @@ router.get('/stats', async (_req, res) => {
   const daily = await db.prepare(`
     SELECT date(studied_at) AS day, SUM(duration_minutes) AS minutes
     FROM study_sessions
-    WHERE studied_at >= datetime('now', '-7 days')
+    WHERE user_id = ? AND studied_at >= datetime('now', '-7 days')
     GROUP BY date(studied_at) ORDER BY day ASC
-  `).all();
+  `).all(req.userId);
 
   res.json({
     today_minutes: today.minutes,
@@ -64,16 +66,27 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Duration must be at least 1 minute' });
   }
 
+  if (unit_id) {
+    const unit = await db.prepare('SELECT id FROM units WHERE id = ? AND user_id = ?')
+      .get(unit_id, req.userId);
+    if (!unit) return res.status(404).json({ error: 'Unit not found' });
+  }
+
+  // Stamped at the time it is logged, so a session still belongs to the right
+  // semester even if its unit is later moved or deleted.
+  const term = await terms.ensureCurrent(req.userId, req.user.year_of_study);
+
   const result = await db.prepare(`
-    INSERT INTO study_sessions (unit_id, duration_minutes, notes) VALUES (?, ?, ?)
-  `).run(unit_id || null, duration_minutes, notes?.trim() || null);
+    INSERT INTO study_sessions (user_id, term_id, unit_id, duration_minutes, notes) VALUES (?, ?, ?, ?, ?)
+  `).run(req.userId, term.id, unit_id || null, duration_minutes, notes?.trim() || null);
 
   const session = await db.prepare('SELECT * FROM study_sessions WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json(session);
 });
 
 router.delete('/:id', async (req, res) => {
-  const result = await db.prepare('DELETE FROM study_sessions WHERE id = ?').run(req.params.id);
+  const result = await db.prepare('DELETE FROM study_sessions WHERE id = ? AND user_id = ?')
+    .run(req.params.id, req.userId);
   if (!result.changes) return res.status(404).json({ error: 'Session not found' });
   res.json({ success: true });
 });

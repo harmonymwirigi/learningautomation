@@ -28,11 +28,12 @@ function enrichNoteRefs(noteRefs, notesWithPages) {
   });
 }
 
-async function analyzePaperForRevision(paperId, { noteIds = null } = {}) {
-  const paper = await db.prepare('SELECT * FROM past_papers WHERE id = ?').get(paperId);
+async function analyzePaperForRevision(paperId, userId, { noteIds = null } = {}) {
+  const paper = await db.prepare('SELECT * FROM past_papers WHERE id = ? AND user_id = ?')
+    .get(paperId, userId);
   if (!paper) throw new Error('Past paper not found');
 
-  let notesWithPages = await loadUnitNotesWithPages(paper.unit_id);
+  let notesWithPages = await loadUnitNotesWithPages(paper.unit_id, userId);
   if (noteIds?.length) {
     const idSet = new Set(noteIds.map(Number));
     notesWithPages = notesWithPages.filter((n) => idSet.has(n.id));
@@ -53,8 +54,8 @@ async function analyzePaperForRevision(paperId, { noteIds = null } = {}) {
   await db.prepare('DELETE FROM paper_questions WHERE paper_id = ?').run(paperId);
 
   const insertQ = db.prepare(`
-    INSERT INTO paper_questions (paper_id, unit_id, question_text, topic, solution_text, note_refs_json, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO paper_questions (user_id, paper_id, unit_id, question_text, topic, solution_text, note_refs_json, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const results = [];
@@ -68,6 +69,7 @@ async function analyzePaperForRevision(paperId, { noteIds = null } = {}) {
 
     const questionText = q.raw.slice(0, 800);
     await insertQ.run(
+      userId,
       paperId,
       paper.unit_id,
       questionText,
@@ -96,17 +98,17 @@ async function analyzePaperForRevision(paperId, { noteIds = null } = {}) {
   };
 }
 
-async function getPaperQuestions(paperId) {
+async function getPaperQuestions(paperId, userId) {
   const paper = await db.prepare(`
     SELECT p.*, u.name AS unit_name
     FROM past_papers p JOIN units u ON p.unit_id = u.id
-    WHERE p.id = ?
-  `).get(paperId);
+    WHERE p.id = ? AND p.user_id = ?
+  `).get(paperId, userId);
   if (!paper) return null;
 
   const questions = (await db.prepare(`
-    SELECT * FROM paper_questions WHERE paper_id = ? ORDER BY sort_order
-  `).all(paperId)).map((q) => ({
+    SELECT * FROM paper_questions WHERE paper_id = ? AND user_id = ? ORDER BY sort_order
+  `).all(paperId, userId)).map((q) => ({
     ...q,
     note_references: q.note_refs_json ? JSON.parse(q.note_refs_json) : [],
     note_refs_json: undefined,
@@ -115,15 +117,17 @@ async function getPaperQuestions(paperId) {
   return { paper, questions, question_count: questions.length };
 }
 
-async function createQuizFromPaper(paperId) {
-  const data = await getPaperQuestions(paperId);
+async function createQuizFromPaper(paperId, userId) {
+  const data = await getPaperQuestions(paperId, userId);
   if (!data) throw new Error('Past paper not found');
   if (data.questions.length === 0) {
     throw new Error('No revision questions found. Run analysis on this paper first.');
   }
 
   const paper = data.paper;
-  const firstNote = await db.prepare('SELECT id FROM notes WHERE unit_id = ? ORDER BY id LIMIT 1').get(paper.unit_id);
+  const firstNote = await db.prepare(
+    'SELECT id FROM notes WHERE unit_id = ? AND user_id = ? ORDER BY id LIMIT 1',
+  ).get(paper.unit_id, userId);
   if (!firstNote) throw new Error('No notes found for this unit.');
 
   const noteId = data.questions
@@ -132,8 +136,8 @@ async function createQuizFromPaper(paperId) {
 
   const title = `Revision: ${paper.title}`;
   const quizResult = await db.prepare(`
-    INSERT INTO quizzes (note_id, unit_id, title) VALUES (?, ?, ?)
-  `).run(noteId, paper.unit_id, title);
+    INSERT INTO quizzes (user_id, note_id, unit_id, title) VALUES (?, ?, ?, ?)
+  `).run(userId, noteId, paper.unit_id, title);
 
   const quizId = quizResult.lastInsertRowid;
   const insertQ = db.prepare(`
@@ -157,7 +161,7 @@ async function createQuizFromPaper(paperId) {
     );
   }
 
-  return getQuiz(quizId);
+  return getQuiz(quizId, userId);
 }
 
 module.exports = {

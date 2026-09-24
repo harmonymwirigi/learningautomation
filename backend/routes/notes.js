@@ -15,14 +15,15 @@ router.get('/', async (req, res, next) => {
       notes = await db.prepare(`
         SELECT n.*, u.name AS unit_name, u.color AS unit_color
         FROM notes n JOIN units u ON n.unit_id = u.id
-        WHERE n.unit_id = ? ORDER BY n.created_at DESC
-      `).all(unit_id);
+        WHERE n.unit_id = ? AND n.user_id = ? ORDER BY n.created_at DESC
+      `).all(unit_id, req.userId);
     } else {
       notes = await db.prepare(`
         SELECT n.*, u.name AS unit_name, u.color AS unit_color
         FROM notes n JOIN units u ON n.unit_id = u.id
+        WHERE n.user_id = ?
         ORDER BY n.created_at DESC
-      `).all();
+      `).all(req.userId);
     }
     res.json(notes);
   } catch (err) {
@@ -36,7 +37,8 @@ router.post('/', uploadNotes.single('file'), async (req, res, next) => {
     if (!unit_id) return res.status(400).json({ error: 'Unit is required' });
     if (!req.file) return res.status(400).json({ error: 'File is required' });
 
-    const unit = await db.prepare('SELECT id FROM units WHERE id = ?').get(unit_id);
+    const unit = await db.prepare('SELECT id FROM units WHERE id = ? AND user_id = ?')
+      .get(unit_id, req.userId);
     if (!unit) return res.status(404).json({ error: 'Unit not found' });
 
     const ext = path.extname(req.file.originalname);
@@ -47,9 +49,9 @@ router.post('/', uploadNotes.single('file'), async (req, res, next) => {
 
     const noteTitle = title?.trim() || req.file.originalname;
     const result = await db.prepare(`
-      INSERT INTO notes (unit_id, title, filename, original_name, file_size)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(unit_id, noteTitle, filename, req.file.originalname, req.file.size);
+      INSERT INTO notes (user_id, unit_id, title, filename, original_name, file_size)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(req.userId, unit_id, noteTitle, filename, req.file.originalname, req.file.size);
 
     const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(note);
@@ -60,7 +62,7 @@ router.post('/', uploadNotes.single('file'), async (req, res, next) => {
 
 router.post('/:id/summarize', async (req, res, next) => {
   try {
-    const result = await summarizeNote(Number(req.params.id));
+    const result = await summarizeNote(Number(req.params.id), req.userId);
     res.json(result);
   } catch (err) {
     next(err);
@@ -69,7 +71,7 @@ router.post('/:id/summarize', async (req, res, next) => {
 
 router.get('/:id/summary', async (req, res, next) => {
   try {
-    const summary = await getNoteSummary(Number(req.params.id));
+    const summary = await getNoteSummary(Number(req.params.id), req.userId);
     if (!summary) return res.status(404).json({ error: 'No summary yet. Click Create Summary first.' });
     res.json(summary);
   } catch (err) {
@@ -80,7 +82,8 @@ router.get('/:id/summary', async (req, res, next) => {
 router.get('/:id/quizzes', async (req, res, next) => {
   try {
     const noteId = Number(req.params.id);
-    const note = await db.prepare('SELECT id FROM notes WHERE id = ?').get(noteId);
+    const note = await db.prepare('SELECT id FROM notes WHERE id = ? AND user_id = ?')
+      .get(noteId, req.userId);
     if (!note) return res.status(404).json({ error: 'Note not found' });
 
     const quizzes = await db.prepare(`
@@ -88,8 +91,8 @@ router.get('/:id/quizzes', async (req, res, next) => {
         (SELECT COUNT(*) FROM quiz_questions WHERE quiz_id = q.id) AS question_count,
         (SELECT MAX(score) FROM quiz_attempts WHERE quiz_id = q.id) AS best_score,
         (SELECT MAX(total) FROM quiz_attempts WHERE quiz_id = q.id) AS total_questions
-      FROM quizzes q WHERE q.note_id = ? ORDER BY q.created_at DESC
-    `).all(noteId);
+      FROM quizzes q WHERE q.note_id = ? AND q.user_id = ? ORDER BY q.created_at DESC
+    `).all(noteId, req.userId);
 
     res.json(quizzes);
   } catch (err) {
@@ -100,7 +103,7 @@ router.get('/:id/quizzes', async (req, res, next) => {
 router.get('/:id/pages', async (req, res, next) => {
   try {
     const { from, to } = req.query;
-    const result = await getNotePageExcerpt(Number(req.params.id), {
+    const result = await getNotePageExcerpt(Number(req.params.id), req.userId, {
       from: from ? Number(from) : 1,
       to: to ? Number(to) : null,
     });
@@ -112,7 +115,8 @@ router.get('/:id/pages', async (req, res, next) => {
 
 router.get('/:id/download', async (req, res, next) => {
   try {
-    const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
+    const note = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?')
+      .get(req.params.id, req.userId);
     if (!note) return res.status(404).json({ error: 'Note not found' });
 
     const buffer = await storage.downloadBuffer(storage.BUCKETS.NOTES, note.filename);
@@ -125,11 +129,12 @@ router.get('/:id/download', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const note = await db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id);
+    const note = await db.prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?')
+      .get(req.params.id, req.userId);
     if (!note) return res.status(404).json({ error: 'Note not found' });
 
     await storage.deleteFile(storage.BUCKETS.NOTES, note.filename);
-    await db.prepare('DELETE FROM notes WHERE id = ?').run(req.params.id);
+    await db.prepare('DELETE FROM notes WHERE id = ? AND user_id = ?').run(req.params.id, req.userId);
     res.json({ success: true });
   } catch (err) {
     next(err);

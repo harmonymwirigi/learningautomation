@@ -6,16 +6,18 @@ function daysUntil(deadline) {
   return Math.ceil((due - now) / (1000 * 60 * 60 * 24));
 }
 
-async function generateDeadlineNotifications() {
+async function generateDeadlineNotifications(userId) {
+  if (!userId) return [];
+
   const assignments = await db.prepare(`
     SELECT a.*, u.name AS unit_name
     FROM assignments a JOIN units u ON a.unit_id = u.id
-    WHERE a.status != 'completed'
-  `).all();
+    WHERE a.user_id = ? AND a.status != 'completed'
+  `).all(userId);
 
   const insert = db.prepare(`
-    INSERT INTO notifications (assignment_id, message, type)
-    SELECT ?, ?, 'deadline'
+    INSERT INTO notifications (user_id, assignment_id, message, type)
+    SELECT ?, ?, ?, 'deadline'
     WHERE NOT EXISTS (
       SELECT 1 FROM notifications
       WHERE assignment_id = ? AND message = ? AND date(created_at) = date('now')
@@ -38,7 +40,7 @@ async function generateDeadlineNotifications() {
 
     if (!message) continue;
 
-    const result = await insert.run(a.id, message, a.id, message);
+    const result = await insert.run(userId, a.id, message, a.id, message);
     if (result.changes) {
       newNotifications.push({ id: result.lastInsertRowid, message });
     }
@@ -47,9 +49,11 @@ async function generateDeadlineNotifications() {
   return newNotifications;
 }
 
-async function processWhatsAppAlerts() {
+async function processWhatsAppAlerts(userId) {
+  if (!userId) return [];
+
   const { sendAlert } = require('./studyDigest');
-  const newOnes = await generateDeadlineNotifications();
+  const newOnes = await generateDeadlineNotifications(userId);
   const results = [];
 
   for (const n of newOnes) {
