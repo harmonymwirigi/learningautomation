@@ -21,10 +21,10 @@ COPY backend/ ./backend/
 # server.js serves ../frontend/dist when it exists
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 
-# The SQLite file and uploaded notes live here — mount volumes so they survive rebuilds.
-RUN mkdir -p backend/data backend/uploads && chown -R node:node backend/data backend/uploads
-VOLUME ["/app/backend/data", "/app/backend/uploads"]
+# The SQLite file and uploaded notes live here. Volumes are attached from outside
+# (docker-compose.yml locally, a Railway volume in production) — Railway rejects
+# the VOLUME instruction, and its volumes mount as root, so the app runs as root.
+RUN mkdir -p backend/data backend/uploads
 
-USER node
 EXPOSE 3001
 CMD ["node", "backend/server.js"]
