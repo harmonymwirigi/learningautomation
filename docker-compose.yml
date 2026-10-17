@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    image: studyflow
+    container_name: studyflow
+    ports:
+      - "3001:3001"
+    # Secrets (JWT_SECRET, OPENAI_API_KEY, ...) come from backend/.env at runtime,
+    # never from the image.
+    env_file:
+      - backend/.env
+    volumes:
+      - studyflow-data:/app/backend/data        # SQLite database (study.db)
+      - studyflow-uploads:/app/backend/uploads  # uploaded notes and past papers
+    restart: unless-stopped
+
+volumes:
+  studyflow-data:
+  studyflow-uploads:

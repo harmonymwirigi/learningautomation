@@ -1,0 +1,14 @@
+# Installed inside the image instead
+**/node_modules
+frontend/dist
+
+# Secrets and local data must never be baked into the image
+**/.env
+backend/data
+backend/uploads
+
+# Not needed to run the app
+.git
+presentation
+*.log
+.DS_Store
